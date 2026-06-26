@@ -181,6 +181,110 @@ async def find_hubs(query: str) -> dict:
         if not hubs:
             return {"status": "success", "result": "No matching hubs found."}
 
+        # Generate custom layout if allowed by context
+        if getattr(context, "allow_generative_ui", True):
+            try:
+                cards = []
+                for idx, h in enumerate(hubs):
+                    name = h.get('name', 'Unknown')
+                    hub_id = h.get('id', '')
+                    desc = h.get('description', '')
+                    loc = h.get('location', '')
+                    avatar_url = h.get('avatar') or "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=120&h=120&q=80"
+                    
+                    # Sub-components of the card
+                    card_children = [
+                        # Left side: Image Avatar
+                        {
+                            "type": "image",
+                            "props": {
+                                "src": avatar_url,
+                                "alt": name,
+                                "className": "w-16 h-16 rounded-lg object-cover flex-shrink-0 border border-slate-200 dark:border-slate-700/50 shadow-inner"
+                            }
+                        },
+                        # Right side: Content container
+                        {
+                            "type": "container",
+                            "props": {
+                                "className": "flex-1 flex flex-col gap-1 p-0 border-0 bg-transparent shadow-none"
+                            },
+                            "children": [
+                                {
+                                    "type": "text",
+                                    "props": {
+                                        "text": name,
+                                        "className": "text-base font-bold text-slate-900 dark:text-white"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                    
+                    if desc:
+                        card_children[1]["children"].append({
+                            "type": "text",
+                            "props": {
+                                "text": desc,
+                                "className": "text-xs text-slate-500 dark:text-slate-400 line-clamp-2"
+                            }
+                        })
+                        
+                    if loc:
+                        card_children[1]["children"].append({
+                            "type": "text",
+                            "props": {
+                                "text": f"📍 {loc}",
+                                "className": "text-xs text-indigo-500 dark:text-indigo-400 font-medium mt-0.5"
+                            }
+                        })
+                        
+                    card_children[1]["children"].append({
+                        "type": "button",
+                        "props": {
+                            "label": "Visit Hub",
+                            "actionUrl": f"agent://switchHub?hubId={hub_id}",
+                            "className": "mt-2 self-start text-xs font-semibold px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded transition-colors duration-200"
+                        }
+                    })
+                    
+                    card_container = {
+                        "type": "container",
+                        "props": {
+                            "className": "flex flex-row items-center gap-4 p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/60 backdrop-blur-md shadow-sm hover:shadow-md hover:border-indigo-500/50 dark:hover:border-indigo-500/50 transition-all duration-300"
+                        },
+                        "children": card_children
+                    }
+                    cards.append(card_container)
+                
+                layout = {
+                    "type": "container",
+                    "props": {
+                        "className": "flex flex-col gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/40 backdrop-blur-lg shadow-xl max-w-2xl w-full"
+                    },
+                    "children": [
+                        {
+                            "type": "text",
+                            "props": {
+                                "text": f"Found {len(hubs)} matching hubs:",
+                                "className": "text-lg font-bold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-800 pb-2"
+                            }
+                        },
+                        {
+                            "type": "container",
+                            "props": {
+                                "className": "flex flex-col gap-3 p-0 border-0 bg-transparent shadow-none"
+                            },
+                            "children": cards
+                        }
+                    ]
+                }
+                
+                context.show_custom_ui(layout=layout)
+                logger.info("[find-hub] Enqueued generative Lego custom UI for matching hubs.")
+            except Exception as ui_err:
+                logger.warning(f"[find-hub] Failed to build and enqueue generative UI: {ui_err}")
+
         # Format output exactly as expected by the agent
         formatted_result = ""
         for idx, h in enumerate(hubs):
