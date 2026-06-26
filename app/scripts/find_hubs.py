@@ -9,57 +9,115 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+def _validate_backend_url(url: str, project_id: str) -> str:
+    """Validates the backend URL based on strict production boundaries."""
+    if not url:
+        raise ValueError("Backend URL cannot be empty.")
+         
+    # Check if we are running in the production GCP project
+    if project_id == "hubscape-production":
+        url_lower = url.lower()
+        
+        # Enforce strict whitelist in production
+        production_whitelist = [
+            "hubscape-backend-lvktsydgdq-uc.a.run.app"
+        ]
+        
+        is_whitelisted = any(domain in url_lower for domain in production_whitelist)
+        if not is_whitelisted:
+            raise ValueError(f"Security Alert: Connection target {url} is not whitelisted for production.")
+            
+    return url
+
 async def _resolve_backend_url() -> str:
-    """Resolves the backend Cloud Run service URL dynamically."""
-    # 1. Check environment variables first
-    url = os.getenv("HUBSCAPE_API_URL") or os.getenv("BACKEND_URL") or os.getenv("VITE_API_URL")
-    if url:
-        return url.rstrip("/")
+    """Resolves the backend Cloud Run service URL dynamically, enforcing security boundaries."""
+    from app.app_utils.env_resolver import get_project_id
+    project_id = get_project_id()
+    
+    url = None
 
-    # 2. Try to fetch from GCP Cloud Run Admin API
+    # 1. Check context payload first (passed dynamically from FastAPI incoming request)
     try:
-        from app.app_utils.env_resolver import get_project_id, get_region
-        project_id = get_project_id()
-        region = get_region()
-        
-        # Get access token from metadata server or default credentials
-        token = None
-        try:
-            import httpx as httpx_sync
-            meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
-            resp = httpx_sync.get(meta_url, headers={"Metadata-Flavor": "Google"}, timeout=1.0)
-            if resp.status_code == 200:
-                token = resp.json().get("access_token")
-        except Exception:
-            pass
-
-        if not token:
-            credentials, _ = google.auth.default(
-                scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            auth_req = google.auth.transport.requests.Request()
-            credentials.refresh(auth_req)
-            token = credentials.token
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        run_api_url = f"https://{region}-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/{project_id}/services/hubscape-backend"
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(run_api_url, headers=headers, timeout=5.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                status = data.get("status", {})
-                url_resolved = status.get("url")
-                if url_resolved:
-                    return url_resolved.rstrip("/")
+        context = hubscape_adk.get_context()
+        if context and context.raw_context:
+            context_url = context.raw_context.get("backend_url")
+            if context_url:
+                url = context_url.rstrip("/")
+                logger.info(f"[find-hub] Found backend URL from context: {url}")
     except Exception as e:
-        logger.warning(f"[find-hub] Failed to resolve Cloud Run backend URL dynamically: {e}")
+        logger.debug(f"[find-hub] Could not resolve backend URL from context: {e}")
 
-    # 3. Local default fallback
-    return "http://localhost:8000"
+    # 2. Check environment variables (e.g. for local testing/debugging)
+    if not url:
+        env_url = os.getenv("HUBSCAPE_API_URL") or os.getenv("BACKEND_URL") or os.getenv("VITE_API_URL")
+        if env_url:
+            url = env_url.rstrip("/")
+            logger.info(f"[find-hub] Found backend URL from env: {url}")
+
+    # 3. Map known projects to their respective Cloud Run URLs to avoid IAM permission errors
+    if not url:
+        try:
+            project_url_map = {
+                "hubscape-geap": "https://hubscape-backend-w3xi4ozhca-uc.a.run.app",
+                "hubscape-production": "https://hubscape-backend-lvktsydgdq-uc.a.run.app",
+                "hubscape-staging": "https://hubscape-backend-staging-w3xi4ozhca-uc.a.run.app",
+            }
+            if project_id in project_url_map:
+                url = project_url_map[project_id]
+                logger.info(f"[find-hub] Found mapped URL for project '{project_id}': {url}")
+        except Exception as e:
+            logger.warning(f"[find-hub] Failed to resolve mapped URL: {e}")
+
+    # 4. Try to fetch from GCP Cloud Run Admin API (Fallback)
+    if not url:
+        try:
+            from app.app_utils.env_resolver import get_region
+            region = get_region()
+            
+            # Get access token from metadata server or default credentials
+            token = None
+            try:
+                import httpx as httpx_sync
+                meta_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+                resp = httpx_sync.get(meta_url, headers={"Metadata-Flavor": "Google"}, timeout=1.0)
+                if resp.status_code == 200:
+                    token = resp.json().get("access_token")
+            except Exception:
+                pass
+
+            if not token:
+                credentials, _ = google.auth.default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                auth_req = google.auth.transport.requests.Request()
+                credentials.refresh(auth_req)
+                token = credentials.token
+
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            run_api_url = f"https://{region}-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/{project_id}/services/hubscape-backend"
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(run_api_url, headers=headers, timeout=5.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    status = data.get("status", {})
+                    url_resolved = status.get("url")
+                    if url_resolved:
+                        url = url_resolved.rstrip("/")
+        except Exception as e:
+            logger.warning(f"[find-hub] Failed to resolve Cloud Run backend URL dynamically: {e}")
+
+    # 5. Local default fallback (ONLY allowed in non-production environments)
+    if not url:
+        if project_id == "hubscape-production":
+            raise ValueError("Security Error: No valid production backend URL could be resolved.")
+        url = "http://localhost:8000"
+
+    # Enforce strict validation on the final resolved URL
+    return _validate_backend_url(url, project_id)
 
 async def _get_oidc_token(audience: str) -> Optional[str]:
     """Generates a GCP OIDC ID Token for the target backend service audience."""
