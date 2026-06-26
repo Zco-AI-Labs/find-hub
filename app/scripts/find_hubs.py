@@ -42,8 +42,15 @@ async def _resolve_backend_url() -> str:
         if context and context.raw_context:
             context_url = context.raw_context.get("backend_url")
             if context_url:
-                url = context_url.rstrip("/")
-                logger.info(f"[find-hub] Found backend URL from context: {url}")
+                context_url = context_url.rstrip("/")
+                # If we are running in the cloud (K_SERVICE is set) but context url is localhost,
+                # ignore it as the cloud cannot reach localhost.
+                is_local = any(loc in context_url for loc in ["localhost", "127.0.0.1", "0.0.0.0"])
+                if is_local and ("K_SERVICE" in os.environ or os.getenv("AIP_TRACKING_URI") or os.getenv("CLOUD_RUN_JOB")):
+                    logger.info(f"[find-hub] Ignoring localhost context URL in remote cloud environment: {context_url}")
+                else:
+                    url = context_url
+                    logger.info(f"[find-hub] Found backend URL from context: {url}")
     except Exception as e:
         logger.debug(f"[find-hub] Could not resolve backend URL from context: {e}")
 
