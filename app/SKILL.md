@@ -1,6 +1,6 @@
 ---
 name: find_hub
-description: "An agent that discovers and locates public or private hubs on the platform using direct Firestore group queries."
+description: "An agent that discovers and locates public or private hubs on the platform using the backend search API."
 allowedRoles: ["member", "Hub Admin"]
 ---
 
