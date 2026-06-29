@@ -143,8 +143,10 @@ async def _get_oidc_token(audience: str) -> Optional[str]:
         resp = httpx_sync.get(meta_url, headers={"Metadata-Flavor": "Google"}, timeout=2.0)
         if resp.status_code == 200:
             return resp.text.strip()
-    except Exception:
-        pass
+        else:
+            logger.warning(f"[find-hub] Metadata identity token request returned status {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"[find-hub] Metadata identity token request failed: {e}")
 
     # 2. Try local user credentials fallback (for local development/testing)
     try:
@@ -153,8 +155,8 @@ async def _get_oidc_token(audience: str) -> Optional[str]:
         auth_req = google.auth.transport.requests.Request()
         token = google.oauth2.id_token.fetch_id_token(auth_req, audience)
         return token
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[find-hub] Local fetch_id_token fallback failed: {e}")
 
     return None
 
