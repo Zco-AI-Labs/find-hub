@@ -43,7 +43,7 @@ async def _switch_hub_impl(hubId: str) -> dict:
             search_endpoint = f"{backend_url}/api/discovery/search"
             params = {"query": hubId}
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(search_endpoint, params=params, headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     hubs = resp.json()

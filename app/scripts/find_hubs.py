@@ -124,7 +124,15 @@ async def _resolve_backend_url() -> str:
         url = "http://localhost:8000"
 
     # Enforce strict validation on the final resolved URL
-    return _validate_backend_url(url, project_id)
+    validated_url = _validate_backend_url(url, project_id)
+    
+    # Upgrade remote URLs to HTTPS to prevent 302 redirects in cloud environments
+    is_local = any(loc in validated_url for loc in ["localhost", "127.0.0.1", "0.0.0.0"])
+    if validated_url.startswith("http://") and not is_local:
+        validated_url = "https://" + validated_url[7:]
+        logger.info(f"[find-hub] Upgraded remote backend URL to HTTPS: {validated_url}")
+        
+    return validated_url
 
 async def _get_oidc_token(audience: str) -> Optional[str]:
     """Generates a GCP OIDC ID Token for the target backend service audience."""
@@ -177,7 +185,7 @@ async def find_hubs(query: str) -> dict:
         search_endpoint = f"{backend_url}/api/discovery/search"
         params = {"query": query}
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             resp = await client.get(search_endpoint, params=params, headers=headers, timeout=15.0)
             if resp.status_code != 200:
                 logger.error(f"[find-hub] Backend search failed: {resp.status_code} - {resp.text}")
