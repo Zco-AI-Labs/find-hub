@@ -6,6 +6,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+@hubscape_adk.require_tool_privilege
 async def switch_hub(hubId: str) -> dict:
     """Navigates to or switches the active workspace to the specified hub name or ID.
     

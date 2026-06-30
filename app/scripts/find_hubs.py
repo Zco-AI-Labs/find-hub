@@ -160,6 +160,7 @@ async def _get_oidc_token(audience: str) -> Optional[str]:
 
     return None
 
+@hubscape_adk.require_tool_privilege
 async def find_hubs(query: str) -> dict:
     """Finds and lists discoverable public and private hubs on the platform that match the search query.
 
