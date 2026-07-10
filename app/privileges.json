@@ -1,0 +1,12 @@
+{
+  "privileges": {
+    "1": {
+      "name": "Hub Navigator",
+      "description": "Allows search access to discover and locate hubs, and switch the active hub workspace.",
+      "tools": [
+        "find_hubs",
+        "switch_hub"
+      ]
+    }
+  }
+}

@@ -1,15 +1,16 @@
-import logging
-import hubscape_adk
 import difflib
+import logging
+
 import httpx
-from typing import Optional
+
+from app.core import hubscape_adk
 
 logger = logging.getLogger(__name__)
 
 @hubscape_adk.require_tool_privilege
 async def switch_hub(hubId: str) -> dict:
     """Navigates to or switches the active workspace to the specified hub name or ID.
-    
+
     Args:
         hubId: The ID or name of the target hub to switch to.
     """
@@ -23,10 +24,10 @@ async def _switch_hub_impl(hubId: str) -> dict:
     logger.info(f"[find-hub] Executing switchHub tool: hubId='{hubId}', user_id='{user_id}'")
 
     resolved_id = hubId
-    
+
     # 1. Try to fetch resolved URL and OIDC token
     try:
-        from app.scripts.find_hubs import _resolve_backend_url, _get_oidc_token
+        from app.scripts.find_hubs import _get_oidc_token, _resolve_backend_url
         backend_url = await _resolve_backend_url()
         oidc_token = await _get_oidc_token(backend_url)
 
@@ -39,11 +40,11 @@ async def _switch_hub_impl(hubId: str) -> dict:
         # 2. Call the search API to resolve the name if it is not a direct ID
         # Hub IDs are typically UUIDs (length >= 28). If it is shorter, it's likely a name query.
         is_id = len(hubId) >= 28 and "-" in hubId
-        
+
         if not is_id:
             search_endpoint = f"{backend_url}/api/discovery/search"
             params = {"query": hubId}
-            
+
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 resp = await client.get(search_endpoint, params=params, headers=headers, timeout=10.0)
                 if resp.status_code == 200:
@@ -74,9 +75,9 @@ async def _switch_hub_impl(hubId: str) -> dict:
             "hubId": resolved_id
         }
     })
-    
+
     return {
-        "status": "success", 
+        "status": "success",
         "message": f"Navigating to hub: {resolved_id}",
         "resolvedHubId": resolved_id
     }

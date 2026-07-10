@@ -1,11 +1,11 @@
 import logging
-import asyncio
 import os
-import httpx
+
 import google.auth
 import google.auth.transport.requests
-import hubscape_adk
-from typing import Optional, List, Dict, Any
+import httpx
+
+from app.core import hubscape_adk
 
 logger = logging.getLogger(__name__)
 
@@ -13,27 +13,27 @@ def _validate_backend_url(url: str, project_id: str) -> str:
     """Validates the backend URL based on strict production boundaries."""
     if not url:
         raise ValueError("Backend URL cannot be empty.")
-         
+
     # Check if we are running in the production GCP project
     if project_id == "hubscape-production":
         url_lower = url.lower()
-        
+
         # Enforce strict whitelist in production
         production_whitelist = [
             "hubscape-backend-lvktsydgdq-uc.a.run.app"
         ]
-        
+
         is_whitelisted = any(domain in url_lower for domain in production_whitelist)
         if not is_whitelisted:
             raise ValueError(f"Security Alert: Connection target {url} is not whitelisted for production.")
-            
+
     return url
 
 async def _resolve_backend_url() -> str:
     """Resolves the backend Cloud Run service URL dynamically, enforcing security boundaries."""
     from app.app_utils.env_resolver import get_project_id
     project_id = get_project_id()
-    
+
     url = None
 
     # 1. Check context payload first (passed dynamically from FastAPI incoming request)
@@ -80,7 +80,7 @@ async def _resolve_backend_url() -> str:
         try:
             from app.app_utils.env_resolver import get_region
             region = get_region()
-            
+
             # Get access token from metadata server or default credentials
             token = None
             try:
@@ -104,7 +104,7 @@ async def _resolve_backend_url() -> str:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
             }
-            
+
             run_api_url = f"https://{region}-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/{project_id}/services/hubscape-backend"
             async with httpx.AsyncClient() as client:
                 resp = await client.get(run_api_url, headers=headers, timeout=5.0)
@@ -125,16 +125,16 @@ async def _resolve_backend_url() -> str:
 
     # Enforce strict validation on the final resolved URL
     validated_url = _validate_backend_url(url, project_id)
-    
+
     # Upgrade remote URLs to HTTPS to prevent 302 redirects in cloud environments
     is_local = any(loc in validated_url for loc in ["localhost", "127.0.0.1", "0.0.0.0"])
     if validated_url.startswith("http://") and not is_local:
         validated_url = "https://" + validated_url[7:]
         logger.info(f"[find-hub] Upgraded remote backend URL to HTTPS: {validated_url}")
-        
+
     return validated_url
 
-async def _get_oidc_token(audience: str) -> Optional[str]:
+async def _get_oidc_token(audience: str) -> str | None:
     """Generates a GCP OIDC ID Token for the target backend service audience."""
     # 1. Try Metadata Server (inside Cloud Run / Vertex AI Reasoning Engine sandbox)
     try:
@@ -150,8 +150,8 @@ async def _get_oidc_token(audience: str) -> Optional[str]:
 
     # 2. Try local user credentials fallback (for local development/testing)
     try:
-        import google.oauth2.id_token
         import google.auth.transport.requests
+        import google.oauth2.id_token
         auth_req = google.auth.transport.requests.Request()
         token = google.oauth2.id_token.fetch_id_token(auth_req, audience)
         return token
@@ -203,13 +203,13 @@ async def find_hubs(query: str) -> dict:
         if getattr(context, "allow_generative_ui", True):
             try:
                 cards = []
-                for idx, h in enumerate(hubs):
+                for h in hubs:
                     name = h.get('name', 'Unknown')
                     hub_id = h.get('id', '')
                     desc = h.get('description', '')
                     loc = h.get('location', '')
                     avatar_url = h.get('avatar') or "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=120&h=120&q=80"
-                    
+
                     # Sub-components of the card
                     card_children = [
                         # Left side: Image Avatar
@@ -238,7 +238,7 @@ async def find_hubs(query: str) -> dict:
                             ]
                         }
                     ]
-                    
+
                     if desc:
                         card_children[1]["children"].append({
                             "type": "text",
@@ -247,7 +247,7 @@ async def find_hubs(query: str) -> dict:
                                 "className": "text-xs text-slate-500 dark:text-slate-400 line-clamp-2"
                             }
                         })
-                        
+
                     if loc:
                         card_children[1]["children"].append({
                             "type": "text",
@@ -256,7 +256,7 @@ async def find_hubs(query: str) -> dict:
                                 "className": "text-xs text-indigo-500 dark:text-indigo-400 font-medium mt-0.5"
                             }
                         })
-                        
+
                     card_children[1]["children"].append({
                         "type": "button",
                         "props": {
@@ -265,7 +265,7 @@ async def find_hubs(query: str) -> dict:
                             "className": "mt-2 self-start text-xs font-semibold px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded transition-colors duration-200"
                         }
                     })
-                    
+
                     card_container = {
                         "type": "container",
                         "props": {
@@ -274,7 +274,7 @@ async def find_hubs(query: str) -> dict:
                         "children": card_children
                     }
                     cards.append(card_container)
-                
+
                 layout = {
                     "type": "container",
                     "props": {
@@ -297,7 +297,7 @@ async def find_hubs(query: str) -> dict:
                         }
                     ]
                 }
-                
+
                 context.show_custom_ui(layout=layout)
                 logger.info("[find-hub] Enqueued generative Lego custom UI for matching hubs.")
             except Exception as ui_err:
