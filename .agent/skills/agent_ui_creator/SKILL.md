@@ -75,6 +75,14 @@ Renders interactive submit/action buttons.
   * `styling` (object):
     * `colorTheme` (string): Accent color palette (e.g. `"blue"`, `"green"`, `"red"`).
 
+### 5. File Handler (`file-handler`)
+Renders a secure file download card. Since the download target points to `/api/media/...`, the platform automatically appends authorization tokens during download requests.
+* **Props:**
+  * `fileUrl` (string): **REQUIRED.** The file download proxy URL (obtained from calling `context.save_file(...)`).
+  * `filename` (string): **REQUIRED.** Display file name.
+  * `fileSize` (string): Optional size annotation (e.g. `"1.2 MB"`).
+  * `allowPreview` (boolean): Set to `false` to suppress inline text/markdown/image previews.
+
 ---
 
 ## 📝 Practical Example: Contact Form Widget
