@@ -55,7 +55,7 @@ def test_adk_save_get_delete_file(mock_gcs_client):
     res = ctx.save_file(scope="platform", filename="test.txt", content=b"hello world", content_type="text/plain")
     assert res["storage_path"] == "agents/custom-agent/platform/test.txt"
     assert "download_url" in res
-    assert "alt=media" in res["download_url"]
+    assert "/api/media/file?path=" in res["download_url"]
     mock_bucket.blob.assert_called_with("agents/custom-agent/platform/test.txt")
     mock_blob.upload_from_string.assert_called_once_with(b"hello world", content_type="text/plain")
 

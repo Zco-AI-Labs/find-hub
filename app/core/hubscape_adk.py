@@ -1,8 +1,16 @@
 import contextvars
 import contextlib
 import datetime
+import logging
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 from typing import Generator, Optional
 from google.cloud import firestore
+
+logger = logging.getLogger(__name__)
 
 _current_context = contextvars.ContextVar("hubscape_context")
 _global_active_context = None
@@ -210,7 +218,7 @@ class RemoteContext:
 
         import urllib.parse
         encoded_path = urllib.parse.quote(storage_path, safe='')
-        download_url = f"https://firebasestorage.googleapis.com/v0/b/{bucket.name}/o/{encoded_path}?alt=media"
+        download_url = f"/api/media/file?path={encoded_path}"
 
         return {
             "storage_path": storage_path,
@@ -300,6 +308,81 @@ class RemoteContext:
         self.actions.append(action_payload)
         return {"status": "success", "message": "Custom UI layout queued."}
 
+    def send_otp(self, phone_number: str) -> dict:
+        """
+        Sends an SMS OTP code to the target phone number via the Hubscape central backend.
+        Supports local mock bypass for non-cloud development environments.
+        """
+        import httpx
+        
+        is_cloud = "K_SERVICE" in os.environ or "AIP_PREDICT_PORT" in os.environ
+        backend_url = self.raw_context.get("backend_url") or os.environ.get("HUBSCAPE_BACKEND_URL")
+        
+        if not is_cloud and not backend_url:
+            logger.warning(
+                f"⚠️ Local Dev Bypass: Simulating OTP SMS send to {phone_number}."
+            )
+            return {
+                "success": True, 
+                "status": "simulated", 
+                "message": "OTP SMS send simulated for local testing. Use code '123456' to verify."
+            }
+            
+        if not backend_url:
+            raise RuntimeError("CRITICAL CONFIGURATION ERROR: HUBSCAPE_BACKEND_URL environment variable is missing in cloud environment!")
+        url = f"{str(backend_url).rstrip('/')}/api/otp/send"
+        headers = {}
+        cap_token = self.raw_context.get("capability_token")
+        if cap_token:
+            headers["Authorization"] = f"Bearer {cap_token}"
+            
+        payload = {
+            "phone_number": phone_number,
+            "agent_id": self.agent_id
+        }
+        
+        resp = httpx.post(url, json=payload, headers=headers, timeout=10.0)
+        if resp.status_code != 200:
+            raise RuntimeError(f"OTP send request failed: {resp.text}")
+        return resp.json()
+
+    def verify_otp(self, phone_number: str, code: str) -> dict:
+        """
+        Verifies the SMS OTP code for the target phone number via the Hubscape central backend.
+        Supports local mock bypass (code '123456' is always accepted) for non-cloud environments.
+        """
+        import httpx
+        
+        is_cloud = "K_SERVICE" in os.environ or "AIP_PREDICT_PORT" in os.environ
+        backend_url = self.raw_context.get("backend_url") or os.environ.get("HUBSCAPE_BACKEND_URL")
+        
+        if not is_cloud and not backend_url:
+            logger.warning(
+                f"⚠️ Local Dev Bypass: Verifying simulated OTP for {phone_number}."
+            )
+            if code == "123456":
+                return {"success": True, "status": "verified", "message": "Simulated OTP verified successfully."}
+            return {"success": False, "status": "invalid", "message": "Simulated OTP verification failed."}
+            
+        if not backend_url:
+            raise RuntimeError("CRITICAL CONFIGURATION ERROR: HUBSCAPE_BACKEND_URL environment variable is missing in cloud environment!")
+        url = f"{str(backend_url).rstrip('/')}/api/otp/verify"
+        headers = {}
+        cap_token = self.raw_context.get("capability_token")
+        if cap_token:
+            headers["Authorization"] = f"Bearer {cap_token}"
+            
+        payload = {
+            "phone_number": phone_number,
+            "code": code,
+            "agent_id": self.agent_id
+        }
+        
+        resp = httpx.post(url, json=payload, headers=headers, timeout=10.0)
+        if resp.status_code != 200:
+            raise RuntimeError(f"OTP verification request failed: {resp.text}")
+        return resp.json()
+
 def get_context() -> RemoteContext:
     try:
         return _current_context.get()
@@ -334,6 +417,7 @@ import json
 import logging
 import jwt
 from cryptography.fernet import Fernet
+_cached_hmac_secret = None
 
 def require_tool_privilege(func):
     """
@@ -343,9 +427,12 @@ def require_tool_privilege(func):
     is_async = inspect.iscoroutinefunction(func)
 
     def verify_privilege():
-        context = get_context()
-        
-        token = context.raw_context.get("capability_token")
+        try:
+            context = get_context()
+            token = context.raw_context.get("capability_token")
+        except Exception:
+            token = None
+            
         is_mock_token = hasattr(token, "_mock_return_value") or type(token).__name__ == "MagicMock"
         if not token or is_mock_token:
             # If no token is provided, only allow it if we are running locally (no K_SERVICE / AIP_PREDICT_PORT)
@@ -359,7 +446,27 @@ def require_tool_privilege(func):
             )
             return True
             
-        secret_key = os.environ.get("HUBSCAPE_HMAC_SECRET") or os.environ.get("HUBSCAPE_KMS_MASTER_KEY") or "dev_secret_key_dont_use_in_prod"
+        global _cached_hmac_secret
+        if _cached_hmac_secret is None:
+            env_secret = os.environ.get("HUBSCAPE_HMAC_SECRET")
+            if env_secret:
+                _cached_hmac_secret = env_secret
+            else:
+                is_cloud = "K_SERVICE" in os.environ or "AIP_PREDICT_PORT" in os.environ
+                if is_cloud:
+                    try:
+                        from google.cloud import secretmanager
+                        client = secretmanager.SecretManagerServiceClient()
+                        project_id = os.environ.get("GCP_PROJECT_ID") or "hubscape-geap"
+                        name = f"projects/{project_id}/secrets/HUBSCAPE_KMS_MASTER_KEY/versions/latest"
+                        response = client.access_secret_version(name=name)
+                        _cached_hmac_secret = response.payload.data.decode("UTF-8").strip()
+                    except Exception as e:
+                        raise RuntimeError(f"CRITICAL CONFIGURATION ERROR: Failed to access HUBSCAPE_KMS_MASTER_KEY from Secret Manager: {e}")
+                else:
+                    _cached_hmac_secret = "dev_secret_key_dont_use_in_prod"
+                    
+        secret_key = _cached_hmac_secret
             
         try:
             # Decode & Verify JWT HMAC
