@@ -1,4 +1,9 @@
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 import asyncio
 import google.auth
 import logging
@@ -202,7 +207,10 @@ class VertexGemini(Gemini):
                 )
             yield llm_response
 
-def get_model(model_name: str = "gemini-2.5-flash") -> VertexGemini:
+def get_model(model_name: str = "gemini-2.5-flash"):
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        from google.adk.models.google_llm import Gemini
+        return Gemini(model=model_name)
     return VertexGemini(model=model_name)
 
 
