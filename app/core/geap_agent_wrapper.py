@@ -2,6 +2,7 @@ import os
 import uuid
 import importlib.util
 import urllib.request
+import time
 from google.genai import types
 from google.adk.runners import Runner
 from app.core import hubscape_adk
@@ -13,6 +14,7 @@ class GEAPAgentWrapper:
         self.runner = None
 
     async def query(self, question: str, context: dict = None) -> str:
+        start_time = time.time()
         core_dir = os.path.dirname(os.path.abspath(__file__))
         runtime_dir = os.path.abspath(os.path.join(core_dir, ".."))
         
@@ -82,6 +84,26 @@ class GEAPAgentWrapper:
         
         session_id = (context or {}).get("sessionId") or f"session_{user_id}_{hub_id}"
         
+        # --- OPENTELEMETRY CONTEXT ENRICHMENT (OPTION A) ---
+        try:
+            from opentelemetry import trace
+            current_span = trace.get_current_span()
+            if current_span:
+                current_span.set_attribute("org_id", org_id or "unknown")
+                current_span.set_attribute("hub_id", hub_id or "unknown")
+                current_span.set_attribute("user_id", user_id or "unknown")
+                current_span.set_attribute("gen_ai.conversation_id", session_id)
+                current_span.set_attribute("gen_ai.request.model", self.agent.model.model_name)
+                current_span.set_attribute("provider", "vertex")
+                
+                # Determine query type (direct vs nested A2A) using call depth
+                depth = (context or {}).get("depth", 0)
+                request_type = "a2a" if depth > 0 else "direct"
+                current_span.set_attribute("gen_ai.request.type", request_type)
+        except Exception as otel_err:
+            print(f"⚠️ Failed to set OpenTelemetry span attributes: {otel_err}")
+        # ----------------------------------------------------
+        
         with hubscape_adk.context_session(remote_ctx):
             if not self.runner:
                 from google.adk.sessions.in_memory_session_service import InMemorySessionService
@@ -116,4 +138,14 @@ class GEAPAgentWrapper:
                         if part.text:
                             text_response += part.text
             
+            # Record final execution latency on active span
+            try:
+                from opentelemetry import trace
+                current_span = trace.get_current_span()
+                if current_span:
+                    latency_ms = (time.time() - start_time) * 1000.0
+                    current_span.set_attribute("latency_ms", float(latency_ms))
+            except Exception as otel_err:
+                pass
+                
             return text_response
